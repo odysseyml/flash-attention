@@ -30,6 +30,11 @@ defaults:
   run:
     shell: bash -x -e -u -o pipefail {0}
 
+# Default GITHUB_TOKEN is read-only; gh release create / upload need
+# contents:write on this fork.
+permissions:
+  contents: write
+
 jobs:
   setup_release:
     name: Ensure release exists
