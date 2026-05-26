@@ -15,6 +15,21 @@ name: Build Odyssey fused-kernels wheel
 # (both .so files land at site-packages top level).
 
 on:
+  # Auto-trigger on push to any odyssey/* branch when the workflow itself or
+  # the build inputs change. Lets us iterate entirely on the feature branch
+  # without putting anything on main — workflow_dispatch only finds workflows
+  # on the default branch, but `push` reads the workflow file from the pushed
+  # ref directly.
+  push:
+    branches:
+      - "odyssey/**"
+    paths:
+      - ".github/workflows/build-odyssey-fused-wheels.yml"
+      - "csrc/layer_norm/setup.py"
+      - "csrc/fused_dense_lib/setup.py"
+      - "tools/bundle_odyssey_fused_kernels.py"
+  # workflow_dispatch kept for the post-merge state when this file lives on
+  # main. Until then, dispatch from the UI won't see this workflow; use push.
   workflow_dispatch:
     inputs:
       odyssey_release_tag:
@@ -25,6 +40,13 @@ on:
         description: "Version segment in the wheel filename"
         required: true
         default: "0.1.0"
+
+# Resolve the release tag + package version from either dispatch inputs or
+# from defaults (push trigger). `inputs.X` is the empty string when not
+# provided, so `||` falls through to the default.
+env:
+  ODYSSEY_RELEASE_TAG: ${{ inputs.odyssey_release_tag || 'odyssey-v2.8.3-fused-1' }}
+  PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0' }}
 
 defaults:
   run:
@@ -44,14 +66,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ! gh release view "${{ inputs.odyssey_release_tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "${{ inputs.odyssey_release_tag }}" \
+          if ! gh release view "${{ env.ODYSSEY_RELEASE_TAG }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "${{ env.ODYSSEY_RELEASE_TAG }}" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_REF_NAME" \
-              --title "${{ inputs.odyssey_release_tag }}" \
+              --title "${{ env.ODYSSEY_RELEASE_TAG }}" \
               --notes "Pre-built dropout_layer_norm + fused_dense_lib wheel for Odyssey lab/post. See workflow run logs for matrix details."
           else
-            echo "Release ${{ inputs.odyssey_release_tag }} already exists; will append wheels."
+            echo "Release ${{ env.ODYSSEY_RELEASE_TAG }} already exists; will append wheels."
           fi
 
   build_wheel:
@@ -143,8 +165,6 @@ jobs:
           ls -la dist-subdir/
 
       - name: Bundle into odyssey-fused-kernels wheel
-        env:
-          PACKAGE_VERSION: ${{ inputs.package_version }}
         run: |
           python tools/bundle_odyssey_fused_kernels.py \
             --dropout-wheel "$(ls dist-subdir/dropout_layer_norm-*.whl)" \
@@ -158,7 +178,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ inputs.odyssey_release_tag }}" \
+          gh release upload "${{ env.ODYSSEY_RELEASE_TAG }}" \
             dist-bundled/*.whl \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
