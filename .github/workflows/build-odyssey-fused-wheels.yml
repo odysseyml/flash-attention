@@ -1,0 +1,155 @@
+name: Build Odyssey fused-kernels wheel
+
+# Builds a single `odyssey-fused-kernels` wheel that bundles
+# `dropout_layer_norm.so` and `fused_dense_lib.so` (the two flash-attention
+# subdir extensions that have no upstream pre-built wheels). Triggered manually
+# from the Actions UI; uploads the result as an asset on a GitHub Release in
+# this fork.
+#
+# Source for the build: this branch's patched csrc/layer_norm/setup.py and
+# csrc/fused_dense_lib/setup.py (extends the gencode list with sm_100 + sm_120
+# so the wheel works on Blackwell B200 and RTX 50-series).
+#
+# Why a single bundled wheel: odyssey's pyproject gets one URL pin instead of
+# two, and `import dropout_layer_norm` / `import fused_dense_lib` still resolve
+# (both .so files land at site-packages top level).
+
+on:
+  workflow_dispatch:
+    inputs:
+      odyssey_release_tag:
+        description: "Release tag in this fork to upload to (e.g. odyssey-v2.8.3-fused-1)"
+        required: true
+        default: "odyssey-v2.8.3-fused-1"
+      package_version:
+        description: "Version segment in the wheel filename"
+        required: true
+        default: "0.1.0"
+
+defaults:
+  run:
+    shell: bash -x -e -u -o pipefail {0}
+
+jobs:
+  setup_release:
+    name: Ensure release exists
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release if missing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "${{ inputs.odyssey_release_tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "${{ inputs.odyssey_release_tag }}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_REF_NAME" \
+              --title "${{ inputs.odyssey_release_tag }}" \
+              --notes "Pre-built dropout_layer_norm + fused_dense_lib wheel for Odyssey lab/post. See workflow run logs for matrix details."
+          else
+            echo "Release ${{ inputs.odyssey_release_tag }} already exists; will append wheels."
+          fi
+
+  build_wheel:
+    name: Build (${{ matrix.os }}, py${{ matrix.python-version }}, cu${{ matrix.cuda-version }}, torch${{ matrix.torch-version }})
+    needs: setup_release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        python-version: ["3.12"]
+        torch-version: ["2.9.1"]
+        cuda-version: ["12.8.1"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout this branch
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Derive short version tags
+        run: |
+          echo "MATRIX_CUDA_SHORT=$(echo ${{ matrix.cuda-version }} | awk -F. '{print $1$2}')" >> "$GITHUB_ENV"
+          echo "MATRIX_TORCH_SHORT=$(echo ${{ matrix.torch-version }} | awk -F. '{print $1"."$2}')" >> "$GITHUB_ENV"
+          echo "WHEEL_CUDA_MAJOR=$(echo ${{ matrix.cuda-version }} | awk -F. '{print $1}')" >> "$GITHUB_ENV"
+          echo "MATRIX_PYTHON_SHORT=$(echo ${{ matrix.python-version }} | awk -F. '{print $1$2}')" >> "$GITHUB_ENV"
+
+      - name: Free up disk space
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+
+      - name: Set up swap
+        if: runner.os == 'Linux'
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 10
+
+      - name: Install CUDA ${{ matrix.cuda-version }}
+        uses: Jimver/cuda-toolkit@v0.2.30
+        with:
+          cuda: ${{ matrix.cuda-version }}
+          method: "network"
+          sub-packages: '["nvcc"]'
+          linux-local-args: '["--toolkit"]'
+
+      - name: Install torch ${{ matrix.torch-version }}+cu${{ env.WHEEL_CUDA_MAJOR }}
+        run: |
+          pip install --upgrade pip
+          pip install setuptools==75.8.0 wheel ninja packaging "typing-extensions>=4.12"
+          # PyTorch publishes cu128, cu130, etc. Use the wheel index matching this matrix entry.
+          pip install --no-cache-dir "torch==${{ matrix.torch-version }}" \
+            --index-url "https://download.pytorch.org/whl/cu${MATRIX_CUDA_SHORT}"
+          nvcc --version
+          python -c "import torch; print('torch:', torch.__version__, 'cuda:', torch.version.cuda)"
+          python -c "from torch.utils.cpp_extension import CUDA_HOME; print('CUDA_HOME:', CUDA_HOME)"
+
+      - name: Build dropout_layer_norm subdir wheel
+        env:
+          MAX_JOBS: 2
+          NVCC_THREADS: 2
+        run: |
+          mkdir -p dist-subdir
+          pushd csrc/layer_norm
+          # ~3.5h ceiling; GH free runners cap at 6h.
+          timeout 3.5h python setup.py bdist_wheel --dist-dir "$GITHUB_WORKSPACE/dist-subdir"
+          popd
+          ls -la dist-subdir/
+
+      - name: Build fused_dense_lib subdir wheel
+        env:
+          MAX_JOBS: 2
+          NVCC_THREADS: 2
+        run: |
+          pushd csrc/fused_dense_lib
+          timeout 1h python setup.py bdist_wheel --dist-dir "$GITHUB_WORKSPACE/dist-subdir"
+          popd
+          ls -la dist-subdir/
+
+      - name: Bundle into odyssey-fused-kernels wheel
+        env:
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: |
+          python tools/bundle_odyssey_fused_kernels.py \
+            --dropout-wheel "$(ls dist-subdir/dropout_layer_norm-*.whl)" \
+            --fused-dense-wheel "$(ls dist-subdir/fused_dense_lib-*.whl)" \
+            --version "${PACKAGE_VERSION}" \
+            --build-tag "cu${WHEEL_CUDA_MAJOR}torch${MATRIX_TORCH_SHORT}" \
+            --output-dir dist-bundled
+          ls -la dist-bundled/
+
+      - name: Upload to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ inputs.odyssey_release_tag }}" \
+            dist-bundled/*.whl \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

@@ -24,6 +24,23 @@ def append_nvcc_threads(nvcc_extra_args):
     return nvcc_extra_args
 
 
+# Odyssey patch: explicit gencode list matching flash-attn root setup.py defaults
+# ("80;90;100;120"). Upstream fused_dense_lib setup.py had no -gencode flags at all,
+# so the built wheel only contained whichever arch the build host happened to detect.
+# This pins the wheel to Ampere + Hopper + Blackwell B200 (sm_100) + RTX 50-series.
+cc_flag = []
+_, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
+cc_flag.append("-gencode")
+cc_flag.append("arch=compute_80,code=sm_80")
+if bare_metal_version >= Version("11.8"):
+    cc_flag.append("-gencode")
+    cc_flag.append("arch=compute_90,code=sm_90")
+if bare_metal_version >= Version("12.8"):
+    cc_flag.append("-gencode")
+    cc_flag.append("arch=compute_100,code=sm_100")
+    cc_flag.append("-gencode")
+    cc_flag.append("arch=compute_120,code=sm_120")
+
 setup(
     name='fused_dense_lib',
     ext_modules=[
@@ -32,7 +49,7 @@ setup(
             sources=['fused_dense.cpp', 'fused_dense_cuda.cu'],
             extra_compile_args={
                                'cxx': ['-O3',],
-                               'nvcc': append_nvcc_threads(['-O3'])
+                               'nvcc': append_nvcc_threads(['-O3'] + cc_flag)
                                }
             )
     ],

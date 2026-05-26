@@ -110,6 +110,15 @@ cc_flag.append("arch=compute_80,code=sm_80")
 if bare_metal_version >= Version("11.8"):
     cc_flag.append("-gencode")
     cc_flag.append("arch=compute_90,code=sm_90")
+# Odyssey patch: match flash-attn root setup.py defaults (FLASH_ATTN_CUDA_ARCHS="80;90;100;120")
+# so the pre-built wheels work on Blackwell B200 (sm_100) and RTX 50-series (sm_120).
+# Upstream subdir setup.py stops at sm_90 (Hopper); without these flags the resulting wheel
+# crashes at runtime on Blackwell with "no kernel image is available for execution on the device".
+if bare_metal_version >= Version("12.8"):
+    cc_flag.append("-gencode")
+    cc_flag.append("arch=compute_100,code=sm_100")
+    cc_flag.append("-gencode")
+    cc_flag.append("arch=compute_120,code=sm_120")
 
 ext_modules.append(
     CUDAExtension(
