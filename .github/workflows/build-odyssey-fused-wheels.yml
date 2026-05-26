@@ -102,7 +102,11 @@ jobs:
         with:
           cuda: ${{ matrix.cuda-version }}
           method: "network"
-          sub-packages: '["nvcc"]'
+          # Need full library set (not just nvcc): subdir compiles include
+          # <torch/extension.h>, which transitively pulls in
+          # torch/include/ATen/cuda/CUDAContextLight.h, which #includes
+          # <cusparse.h>. With nvcc-only the build fails at ln_api.cpp.
+          sub-packages: '["nvcc", "cudart", "cudart-dev", "libcusparse-dev"]'
           linux-local-args: '["--toolkit"]'
 
       - name: Install torch ${{ matrix.torch-version }}+cu${{ env.WHEEL_CUDA_MAJOR }}
