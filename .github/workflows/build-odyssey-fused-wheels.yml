@@ -85,7 +85,7 @@ jobs:
         os: [ubuntu-22.04, ubuntu-22.04-arm]
         python-version: ["3.12"]
         torch-version: ["2.9.1"]
-        cuda-version: ["12.8.1"]
+        cuda-version: ["13.0.2"]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -129,7 +129,7 @@ jobs:
           # torch/include/ATen/cuda/CUDAContextLight.h, which #includes
           # <cusparse.h>. The Jimver action prefixes entries with `cuda-` and
           # suffixes with `-<major>-<minor>`, so we ask for the umbrella
-          # `cuda-libraries-dev-12-8` package which provides cuSPARSE,
+          # `cuda-libraries-dev-<major>-<minor>` package (e.g. 13-0) which provides cuSPARSE,
           # cuBLAS, etc. dev headers.
           sub-packages: '["nvcc", "cudart", "cudart-dev", "libraries-dev"]'
           linux-local-args: '["--toolkit"]'
