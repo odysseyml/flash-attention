@@ -1,0 +1,101 @@
+name: Build layer_norm + flash-attn for torch2.10 cu130
+
+# Builds csrc/layer_norm (grafted layer-norm variant for odyssey-systems/layer-norm)
+# and the full flash-attn wheel for torch 2.10 + cu13.0 (upstream ships wheels
+# only up to torch 2.9). sm80/90/100/120.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to upload wheels to"
+        required: true
+        default: "torch210-cu130-1"
+
+defaults:
+  run:
+    shell: bash -x -e -u -o pipefail {0}
+
+permissions:
+  contents: write
+
+jobs:
+  setup_release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release if missing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ inputs.release_tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+          gh release create "${{ inputs.release_tag }}" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_REF_NAME" --title "${{ inputs.release_tag }}" \
+            --notes "layer_norm + flash-attn wheels for torch 2.10 / cu13.0."
+
+  build:
+    name: ${{ matrix.target }} ${{ matrix.os }}
+    needs: setup_release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        target: [layer_norm, flash_attn]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/lib/android || true
+
+      - name: Set up swap
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 10
+
+      - name: Install CUDA 13.0
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: "13.0.2"
+          method: "network"
+
+      - name: Install torch 2.10 cu130
+        run: |
+          pip install --upgrade pip
+          pip install setuptools==75.8.0 wheel ninja packaging psutil "typing-extensions>=4.12"
+          pip install --no-cache-dir "torch==2.10.*" --index-url https://download.pytorch.org/whl/cu130
+          python -c "import torch; print(torch.__version__, torch.version.cuda)"
+
+      - name: Build layer_norm
+        if: matrix.target == 'layer_norm'
+        env:
+          MAX_JOBS: 2
+          NVCC_THREADS: 2
+        run: |
+          pushd csrc/layer_norm
+          timeout 5h python setup.py bdist_wheel --dist-dir "$GITHUB_WORKSPACE/dist"
+          popd
+
+      - name: Build flash-attn
+        if: matrix.target == 'flash_attn'
+        env:
+          MAX_JOBS: 2
+          NVCC_THREADS: 2
+          FLASH_ATTENTION_FORCE_BUILD: "TRUE"
+          FLASH_ATTN_CUDA_ARCHS: "80;90;100;120"
+        run: |
+          timeout 5.5h python setup.py bdist_wheel --dist-dir "$GITHUB_WORKSPACE/dist"
+
+      - name: Rename and upload
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for f in dist/*.whl; do
+            base=$(basename "$f" .whl)
+            mv "$f" "dist/${base}+cu130torch2.10.whl"
+          done
+          ls dist/
+          gh release upload "${{ inputs.release_tag }}" dist/*.whl --repo "$GITHUB_REPOSITORY" --clobber
