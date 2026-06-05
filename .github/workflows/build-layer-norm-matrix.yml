@@ -11,6 +11,10 @@ on:
         description: "Release tag to upload wheels to"
         required: true
         default: "torch210-cu130-1"
+      targets:
+        description: "Space-separated build targets (layer_norm flash_attn)"
+        required: false
+        default: "layer_norm flash_attn"
 
 defaults:
   run:
@@ -70,7 +74,7 @@ jobs:
           python -c "import torch; print(torch.__version__, torch.version.cuda)"
 
       - name: Build layer_norm
-        if: matrix.target == 'layer_norm'
+        if: matrix.target == 'layer_norm' && contains(inputs.targets, 'layer_norm')
         env:
           MAX_JOBS: 2
           NVCC_THREADS: 2
@@ -80,7 +84,7 @@ jobs:
           popd
 
       - name: Build flash-attn
-        if: matrix.target == 'flash_attn'
+        if: matrix.target == 'flash_attn' && contains(inputs.targets, 'flash_attn')
         env:
           MAX_JOBS: 2
           NVCC_THREADS: 2
@@ -90,6 +94,7 @@ jobs:
           timeout 5.5h python setup.py bdist_wheel --dist-dir "$GITHUB_WORKSPACE/dist"
 
       - name: Rename and upload
+        if: contains(inputs.targets, matrix.target)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
