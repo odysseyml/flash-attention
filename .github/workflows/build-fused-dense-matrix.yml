@@ -41,24 +41,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        os: [ubuntu-22.04]
         combo:
-          - { torch: "2.9.*",  cuda: "12.8.1", cuda_short: "128" }
-          - { torch: "2.10.*", cuda: "12.6.3", cuda_short: "126" }
-          - { torch: "2.10.*", cuda: "12.8.1", cuda_short: "128" }
           - { torch: "2.10.*", cuda: "13.0.2", cuda_short: "130" }
-          - { torch: "2.11.*", cuda: "12.6.3", cuda_short: "126" }
-          - { torch: "2.11.*", cuda: "12.8.1", cuda_short: "128" }
-          - { torch: "2.11.*", cuda: "13.0.2", cuda_short: "130" }
-          - { torch: "2.12.*", cuda: "12.6.3", cuda_short: "126" }
-          - { torch: "2.12.*", cuda: "13.0.2", cuda_short: "130" }
-          - { torch: "2.12.*", cuda: "13.2.0", cuda_short: "132" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/lib/android || true
 
       - name: Install CUDA
         uses: Jimver/cuda-toolkit@v0.2.35
