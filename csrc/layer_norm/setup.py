@@ -103,8 +103,12 @@ cc_flag = []
 _, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
 if bare_metal_version < Version("11.0"):
     raise RuntimeError("dropout_layer_norm is only supported on CUDA 11 and above")
-cc_flag.append("-gencode")
-cc_flag.append("arch=compute_70,code=sm_70")
+# Volta (sm_70) was removed from nvcc in CUDA 13. Only emit it for CUDA < 13
+# so the cu12 wheels keep V100 support while the cu13 build does not abort on
+# "Unsupported gpu architecture 'compute_70'".
+if bare_metal_version < Version("13.0"):
+    cc_flag.append("-gencode")
+    cc_flag.append("arch=compute_70,code=sm_70")
 cc_flag.append("-gencode")
 cc_flag.append("arch=compute_80,code=sm_80")
 if bare_metal_version >= Version("11.8"):
